@@ -10,7 +10,11 @@
     {
       "name": "caveman",
       "description": "Talk like caveman. Cut ~75% tokens. Keep all technical accuracy.",
-      "source": "./",
+      "source": {
+        "source": "github",
+        "repo": "tompassarelli/caveman",
+        "sha": "25d22f864ad68cc447a4cb93aefde918aa4aec9f"
+      },
       "category": "productivity"
     }
   ]
