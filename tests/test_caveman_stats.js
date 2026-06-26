@@ -344,9 +344,60 @@ test('writes statusline suffix file after a stats run', (tmp) => {
   });
   const suffixPath = path.join(claudeDir, '.caveman-statusline-suffix');
   assert.ok(fs.existsSync(suffixPath));
-  // 1500 / 0.35 = 4286, saved = 2786 → "⛏  2.8k" (two spaces after ⛏, #459)
+  // 1500 / 0.35 = 4286, saved = 2786 → session-scoped, labeled "⛏ 2.8k saved".
   const suffix = fs.readFileSync(suffixPath, 'utf8');
-  assert.match(suffix, /^⛏  2\.8k$/);
+  assert.match(suffix, /^⛏ 2\.8k saved$/);
+});
+
+test('statusline scope: session vs lifetime vs both', () => {
+  const { renderSuffix } = require(path.join(ROOT, 'src', 'hooks', 'caveman-stats.js'));
+  // session leads with this-session savings; lifetime shows the cumulative;
+  // both joins them. humanizeTokens: 2786 → 2.8k, 316500 → 316.5k.
+  assert.strictEqual(renderSuffix('session', 2786, 316500), '⛏ 2.8k saved');
+  assert.strictEqual(renderSuffix('lifetime', 2786, 316500), '⛏ 316.5k saved');
+  assert.strictEqual(renderSuffix('both', 2786, 316500), '⛏ 2.8k ⋅ 316.5k');
+  // Nothing to show → empty string (statusline renders no fake zero).
+  assert.strictEqual(renderSuffix('session', 0, 0), '');
+  assert.strictEqual(renderSuffix('both', 0, 0), '');
+});
+
+test('CAVEMAN_STATUSLINE_SCOPE=lifetime switches the rendered suffix', (tmp) => {
+  // Two prior sessions in history (185 + 371 saved) + this session (2786).
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { model: 'claude-sonnet-4-7', usage: { output_tokens: 1500 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  fs.writeFileSync(path.join(claudeDir, '.caveman-history.jsonl'),
+    JSON.stringify({ ts: 1000, session_id: 'a', mode: 'full', output_tokens: 100, est_saved_tokens: 185, est_saved_usd: 0 }) + '\n' +
+    JSON.stringify({ ts: 2000, session_id: 'b', mode: 'full', output_tokens: 200, est_saved_tokens: 371, est_saved_usd: 0 }) + '\n');
+  execFileSync(process.execPath, [STATS, '--session-file', sess], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir, CAVEMAN_STATUSLINE_SCOPE: 'lifetime' },
+  });
+  // lifetime = 185 + 371 + 2786 (this session 's.jsonl') = 3342 → 3.3k.
+  const suffix = fs.readFileSync(path.join(claudeDir, '.caveman-statusline-suffix'), 'utf8');
+  assert.match(suffix, /^⛏ 3\.3k saved$/);
+});
+
+test('Stop hook (caveman-session-stats.js) refreshes the suffix from stdin', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { model: 'claude-sonnet-4-7', usage: { output_tokens: 1500 } } },
+  ]);
+  const claudeDir = path.join(tmp, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, '.caveman-active'), 'full');
+  const HOOK = path.join(ROOT, 'src', 'hooks', 'caveman-session-stats.js');
+  execFileSync(process.execPath, [HOOK], {
+    input: JSON.stringify({ transcript_path: sess, hook_event_name: 'Stop' }),
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir },
+  });
+  // Same 2786 session savings as a manual /caveman-stats run — but with no
+  // user action, just a turn ending.
+  const suffix = fs.readFileSync(path.join(claudeDir, '.caveman-statusline-suffix'), 'utf8');
+  assert.match(suffix, /^⛏ 2\.8k saved$/);
 });
 
 test('humanizeTokens formats small/medium/large correctly', () => {

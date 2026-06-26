@@ -35,12 +35,16 @@ else
 fi
 
 # Savings suffix: on by default. Opt out via CAVEMAN_STATUSLINE_SAVINGS=0.
-# Reads a pre-rendered string written by caveman-stats.js so we don't shell out
-# to node on every keystroke. Refuses symlinks and strips control bytes —
-# same hardening as the flag file (a local attacker could plant a file with
-# ANSI escape codes otherwise). Until /caveman-stats has run at least once,
-# the suffix file is absent and nothing is rendered — so the default is safe
-# for fresh installs (no fake number, no crash).
+# Reads a pre-rendered string so we never shell out to node on a render. The
+# string is rewritten at the end of every turn by the Stop hook
+# (caveman-session-stats.js) and by /caveman-stats, so it tracks the live
+# session instead of freezing on a stale number. CAVEMAN_STATUSLINE_SCOPE
+# (session|lifetime|both, default session) picks what it shows — decided at
+# write time in node, so nothing to parse here. Refuses symlinks and strips
+# control bytes — same hardening as the flag file (a local attacker could
+# plant a file with ANSI escape codes otherwise). Until the first turn ends
+# the suffix file is absent and nothing is rendered — safe for fresh installs
+# (no fake number, no crash).
 if [ "${CAVEMAN_STATUSLINE_SAVINGS:-1}" != "0" ]; then
   SAVINGS_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.caveman-statusline-suffix"
   if [ -f "$SAVINGS_FILE" ] && [ ! -L "$SAVINGS_FILE" ]; then

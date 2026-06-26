@@ -20,11 +20,20 @@ If you installed caveman standalone (without the plugin), the unified Node insta
 - Emits a small per-turn reinforcement reminder when the flag is set to a non-independent mode (`lite`/`full`/`ultra`/`wenyan*`)
 - Supports: `lite`, `full`, `ultra`, `wenyan`, `wenyan-lite`, `wenyan-full`, `wenyan-ultra`, `commit`, `review`, `compress`
 
+### `caveman-session-stats.js` — Stop hook
+
+- Fires when Claude finishes a turn; reads the `transcript_path` Claude Code passes on stdin
+- Recomputes this session's savings and rewrites `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` so the badge tracks the live session instead of freezing until the next manual `/caveman-stats`
+- Shares one routine (`recordSnapshot`) with `caveman-stats.js`, so the history log + suffix stay in sync no matter which path wrote them
+- Emits no decision — never blocks or re-triggers a turn; silent-fails so a stats hiccup can't cost a response
+
 ### `caveman-statusline.sh` / `caveman-statusline.ps1` — Statusline badge script
 
 - Reads `$CLAUDE_CONFIG_DIR/.caveman-active` (default `~/.claude/.caveman-active`) and outputs a colored badge
 - Shows `[CAVEMAN]`, `[CAVEMAN:ULTRA]`, `[CAVEMAN:WENYAN]`, etc.
-- Appends the lifetime savings suffix `⛏ 12.4k` from `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` (written by `caveman-stats.js` on each `/caveman-stats` run; absent until the first run, so fresh installs render no fake number). Opt out with `CAVEMAN_STATUSLINE_SAVINGS=0`.
+- Appends the savings suffix `⛏ 12.4k saved` from `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix`, rewritten every turn by the Stop hook (and by `/caveman-stats`); absent until the first turn ends, so fresh installs render no fake number. The label disambiguates the figure from context-window usage.
+  - `CAVEMAN_STATUSLINE_SCOPE` (`session` | `lifetime` | `both`, default `session`) chooses what it shows: this session's savings (grows live as you work), the cumulative lifetime total, or `⛏ session ⋅ lifetime`.
+  - Opt out of the suffix entirely with `CAVEMAN_STATUSLINE_SAVINGS=0`.
 
 ## Statusline Badge
 
@@ -88,11 +97,11 @@ SessionStart hook ──writes "full"──▶ $CLAUDE_CONFIG_DIR/.caveman-activ
                                               │
                                            reads
                                               ▼
-                                     Statusline script
-                                    [CAVEMAN:ULTRA] │ ...
+                                     Statusline script ◀──reads── .caveman-statusline-suffix ◀──writes── Stop hook (every turn)
+                                    [CAVEMAN:ULTRA] ⛏ 12.4k saved
 ```
 
-SessionStart stdout is injected as hidden system context — Claude sees it, users don't. The statusline runs as a separate process. The flag file is the bridge.
+SessionStart stdout is injected as hidden system context — Claude sees it, users don't. The statusline runs as a separate process. The flag file (mode) and the suffix file (savings) are the bridges: the Stop hook refreshes the suffix at each turn end so the statusline stays a cheap `cat` with no per-render node spawn.
 
 ## Uninstall
 
@@ -106,6 +115,6 @@ node bin/install.js --uninstall
 ```
 
 Or manually:
-1. Remove the caveman hook files from `$CLAUDE_CONFIG_DIR/hooks/` (default `~/.claude/hooks/`): `caveman-activate.js`, `caveman-mode-tracker.js`, `caveman-stats.js`, `caveman-config.js`, and `caveman-statusline.{sh,ps1}`.
-2. Remove the SessionStart, UserPromptSubmit, and statusLine entries from `$CLAUDE_CONFIG_DIR/settings.json`.
-3. Delete `$CLAUDE_CONFIG_DIR/.caveman-active` (and `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` if you ran `/caveman-stats`).
+1. Remove the caveman hook files from `$CLAUDE_CONFIG_DIR/hooks/` (default `~/.claude/hooks/`): `caveman-activate.js`, `caveman-mode-tracker.js`, `caveman-session-stats.js`, `caveman-stats.js`, `caveman-config.js`, and `caveman-statusline.{sh,ps1}`.
+2. Remove the SessionStart, UserPromptSubmit, Stop, and statusLine entries from `$CLAUDE_CONFIG_DIR/settings.json`.
+3. Delete `$CLAUDE_CONFIG_DIR/.caveman-active` (and `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix`).

@@ -276,6 +276,64 @@ function formatStats({ outputTokens, cacheReadTokens, turns, mode, model, sessio
     (footer ? footer + '\n' : '');
 }
 
+// Statusline suffix scope: which savings number the badge shows.
+//   session  (default) — this session only, grows live as you work
+//   lifetime           — cumulative across all sessions
+//   both               — "session ⋅ lifetime"
+// Set via CAVEMAN_STATUSLINE_SCOPE. Unknown values fall back to session.
+function statuslineScope() {
+  const s = String(process.env.CAVEMAN_STATUSLINE_SCOPE || 'session').toLowerCase();
+  return ['session', 'lifetime', 'both'].includes(s) ? s : 'session';
+}
+
+// Render the pre-rendered statusline suffix for a scope. Empty string when
+// there's nothing to show (no savings, or a non-'full' mode with no benchmark)
+// so the statusline renders nothing rather than a fake zero. The 'saved' label
+// disambiguates the figure from context-window usage at a glance.
+function renderSuffix(scope, sessionSaved, lifetimeSaved) {
+  if (scope === 'lifetime') {
+    return lifetimeSaved > 0 ? `⛏ ${humanizeTokens(lifetimeSaved)} saved` : '';
+  }
+  if (scope === 'both') {
+    if (sessionSaved <= 0 && lifetimeSaved <= 0) return '';
+    return `⛏ ${humanizeTokens(sessionSaved)} ⋅ ${humanizeTokens(lifetimeSaved)}`;
+  }
+  return sessionSaved > 0 ? `⛏ ${humanizeTokens(sessionSaved)} saved` : '';
+}
+
+// Parse the session, append a lifetime snapshot, and refresh the statusline
+// suffix file. The shared side effects behind both the /caveman-stats skill and
+// the Stop hook (caveman-session-stats.js) — both want the same history line +
+// suffix, so the badge tracks the live session instead of freezing until the
+// next manual /caveman-stats. Returns parsed totals + active mode so callers
+// don't re-read the transcript.
+function recordSnapshot({ claudeDir, historyPath, sessionFile }) {
+  const parsed = parseSession(sessionFile);
+  const mode = readFlag(path.join(claudeDir, '.caveman-active'));
+  if (parsed.turns > 0) {
+    const { estSavedTokens, estSavedUsd } = deriveSavings({ ...parsed, mode });
+    const sessionId = path.basename(sessionFile, '.jsonl');
+    appendFlag(historyPath, JSON.stringify({
+      ts: Date.now(),
+      session_id: sessionId,
+      mode: mode || null,
+      model: parsed.model || null,
+      output_tokens: parsed.outputTokens,
+      est_saved_tokens: estSavedTokens,
+      est_saved_usd: estSavedUsd,
+    }));
+
+    // Suffix: tiny pre-rendered string the shell statusline cat's without
+    // parsing JSONL or spawning node. aggregateHistory includes the line we
+    // just appended, so lifetime reflects current-session progress. Routed
+    // through safeWriteFlag — same symlink-clobber hardening as the flag file.
+    const lifetimeSaved = aggregateHistory(historyPath, null).estSavedTokens;
+    const suffix = renderSuffix(statuslineScope(), estSavedTokens, lifetimeSaved);
+    safeWriteFlag(path.join(claudeDir, '.caveman-statusline-suffix'), suffix);
+  }
+  return { parsed, mode };
+}
+
 function main() {
   const args = process.argv.slice(2);
   const i = args.indexOf('--session-file');
@@ -307,33 +365,9 @@ function main() {
     process.exit(1);
   }
 
-  const parsed = parseSession(sessionFile);
-  const mode = readFlag(path.join(claudeDir, '.caveman-active'));
-
-  // Append a snapshot of this session's totals to the lifetime log. Multiple
-  // /caveman-stats calls in one session emit multiple lines for the same
-  // session_id; aggregateHistory keeps only the latest per session_id.
-  if (parsed.turns > 0) {
-    const { estSavedTokens, estSavedUsd } = deriveSavings({ ...parsed, mode });
-    const sessionId = path.basename(sessionFile, '.jsonl');
-    appendFlag(historyPath, JSON.stringify({
-      ts: Date.now(),
-      session_id: sessionId,
-      mode: mode || null,
-      model: parsed.model || null,
-      output_tokens: parsed.outputTokens,
-      est_saved_tokens: estSavedTokens,
-      est_saved_usd: estSavedUsd,
-    }));
-
-    // Statusline suffix: tiny pre-rendered string the shell statusline can
-    // cat without parsing JSONL. Updated on every /caveman-stats run.
-    // Routed through safeWriteFlag — the suffix path is predictable and
-    // user-owned, same symlink-clobber surface as the .caveman-active flag.
-    const agg = aggregateHistory(historyPath, null);
-    const suffix = agg.estSavedTokens > 0 ? `⛏  ${humanizeTokens(agg.estSavedTokens)}` : '';
-    safeWriteFlag(path.join(claudeDir, '.caveman-statusline-suffix'), suffix);
-  }
+  // Snapshot this session to the lifetime log + refresh the statusline suffix.
+  // Identical to what the Stop hook does every turn — keeps the two in sync.
+  const { parsed, mode } = recordSnapshot({ claudeDir, historyPath, sessionFile });
 
   if (share) {
     process.stdout.write(formatShare({ ...parsed, mode }) + '\n');
@@ -350,4 +384,5 @@ module.exports = {
   formatStats, formatShare, formatHistory, aggregateHistory, parseDuration, deriveSavings,
   parseSession, priceForModel, formatUsd, COMPRESSION, MODEL_OUTPUT_PRICE_PER_M,
   findCompressedPairs, summarizeCompressed, humanizeTokens,
+  recordSnapshot, renderSuffix, statuslineScope, findRecentSession,
 };
